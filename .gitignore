@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Artefacts locaux (générés)
+logs/
+cache/
+*.parquet
+*.csv
+
+# Secrets / environnement
+.env

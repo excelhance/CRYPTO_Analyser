@@ -1,0 +1,74 @@
+# Configuration de l'outil de scan Binance Spot /USDC (CDC v1.1, §4.6).
+# Valeurs de départ robustes — à caler PAR OBSERVATION, jamais par optimisation sur backtest.
+
+universe:
+  quote_asset: USDC
+  status: TRADING
+
+intervals: ["4h", "12h", "1d", "1w", "1M"]
+
+history:
+  limit: 1000                       # bougies par requête (max Binance)
+
+cache:
+  mode: incremental                 # incremental | force_refresh
+
+gates:
+  min_quote_volume_24h: 1000000     # 1 M USDC / 24 h
+  min_bars_per_tf: 50               # un TF sous ce seuil est retiré (dégradation)
+  ema200_min_bars: 200              # EMA200 calculée seulement si >= 200 bougies
+
+indicators:
+  ema: [20, 50, 200]
+  rsi: { period: 14, oversold: 30, overbought: 70 }
+  macd: { fast: 12, slow: 26, signal: 9 }
+  sar: { step: 0.02, max: 0.20 }
+  bbands: { period: 20, stddev: 2.0 }
+  momentum: { period: 10 }          # MOM = close - close[10] (à aligner sur votre chart Binance)
+  volume_ma: { period: 20 }
+  adx: { period: 14, trend_threshold: 25 }
+  atr: { period: 14 }               # risque/sortie uniquement (hors score)
+
+category_weights:                   # somme = 1.0 ; l'ADX module le poids de 'trend'
+  trend: 0.35
+  momentum: 0.30
+  volatility: 0.15
+  volume: 0.15
+  patterns: 0.05
+
+classification:
+  neutral_band: 0.10                # |s| < 0.10 => neutre
+
+tiers:                              # consolidation descendante (approche B)
+  biais_fond:
+    timeframes: { "1w": 0.7, "1M": 0.3 }
+  reference:
+    timeframe: "1d"
+  declenchement:
+    timeframes: { "4h": 0.6, "12h": 0.4 }
+
+alignment_multiplier:               # doit respecter full >= partial >= neutral >= contradiction
+  full_align: 1.0
+  partial: 0.7
+  neutral: 0.5
+  contradiction: 0.2
+
+context_insufficient_factor: 0.5    # minoration si biais indéterminé (1M et 1W insuffisants)
+
+thresholds:
+  watch: 55
+  signal: 70
+
+fundamentals:
+  enabled: true
+  top_n: 10
+  model: claude-sonnet-5
+  web_search: true
+  sources:
+    coingecko: { demo_key_env: COINGECKO_DEMO_KEY }
+    defillama: { enabled: true }
+
+output:
+  format: csv
+  one_row_per: pair
+  timestamped: true
