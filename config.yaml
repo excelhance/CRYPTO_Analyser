@@ -12,6 +12,18 @@ history:
 
 cache:
   mode: incremental                 # incremental | force_refresh
+  directory: data/cache             # répertoire du cache parquet (un fichier par symbole_intervalle)
+
+rate_limiter:
+  budget_per_minute: 4000           # < MAX_WEIGHT_PER_MINUTE (6000, constants.py) ; garde-fou anti-boucle de retry
+  max_retries: 5                    # tentatives max après un 429
+  backoff_base_seconds: 1.0         # base du backoff exponentiel si pas de Retry-After
+
+http:
+  connect_timeout: 5.0              # secondes
+  read_timeout: 15.0
+  write_timeout: 5.0
+  pool_timeout: 5.0
 
 gates:
   min_quote_volume_24h: 1000000     # 1 M USDC / 24 h

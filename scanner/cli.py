@@ -15,6 +15,9 @@ import yaml
 from pydantic import ValidationError
 from rich.console import Console
 
+# L'import du package déclenche `scanner/__init__.py` qui force l'encodage
+# UTF-8 de stdout/stderr — nécessaire ici sous Windows quand la sortie est
+# capturée/redirigée (cf. docstring de `_force_utf8_streams`).
 from .config import AppConfig, load_config
 from .logging_setup import setup_logging
 

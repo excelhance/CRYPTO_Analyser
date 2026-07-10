@@ -20,7 +20,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .constants import VALID_INTERVALS
+from .constants import MAX_WEIGHT_PER_MINUTE, VALID_INTERVALS
 
 
 # --------------------------------------------------------------------------- #
@@ -76,12 +76,40 @@ class HistoryCfg(_Base):
 
 class CacheCfg(_Base):
     mode: Literal["incremental", "force_refresh"] = "incremental"
+    directory: str = Field(min_length=1, description="Répertoire du cache parquet (relatif ou absolu).")
 
 
 class GatesCfg(_Base):
     min_quote_volume_24h: float = Field(ge=0, description="Volume quote 24 h minimal (USDC).")
     min_bars_per_tf: int = Field(ge=1, description="Sous ce nombre de bougies, un TF est retiré.")
     ema200_min_bars: int = Field(ge=1, description="EMA200 calculée seulement si >= ce nombre.")
+
+
+# --------------------------------------------------------------------------- #
+# Rate limiter & HTTP (Lot 1)                                                  #
+# --------------------------------------------------------------------------- #
+class RateLimiterCfg(_Base):
+    budget_per_minute: int = Field(
+        gt=0, description="Budget de poids/minute du gouverneur (garde-fou anti-retry)."
+    )
+    max_retries: int = Field(ge=0, description="Nombre max. de tentatives après un 429.")
+    backoff_base_seconds: float = Field(gt=0, description="Base du backoff (secondes) sur 429 sans Retry-After.")
+
+    @model_validator(mode="after")
+    def _check_budget_below_binance_limit(self) -> "RateLimiterCfg":
+        if self.budget_per_minute >= MAX_WEIGHT_PER_MINUTE:
+            raise ValueError(
+                f"rate_limiter.budget_per_minute ({self.budget_per_minute}) doit être "
+                f"strictement inférieur à la limite Binance ({MAX_WEIGHT_PER_MINUTE})"
+            )
+        return self
+
+
+class HttpCfg(_Base):
+    connect_timeout: float = Field(gt=0, description="Timeout de connexion (secondes).")
+    read_timeout: float = Field(gt=0, description="Timeout de lecture (secondes).")
+    write_timeout: float = Field(gt=0, description="Timeout d'écriture (secondes).")
+    pool_timeout: float = Field(gt=0, description="Timeout d'attente d'une connexion du pool (secondes).")
 
 
 # --------------------------------------------------------------------------- #
@@ -308,6 +336,8 @@ class AppConfig(_Base):
     intervals: list[str]
     history: HistoryCfg
     cache: CacheCfg
+    rate_limiter: RateLimiterCfg
+    http: HttpCfg
     gates: GatesCfg
     indicators: IndicatorsCfg
     category_weights: CategoryWeightsCfg

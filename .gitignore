@@ -9,8 +9,12 @@ venv/
 # Artefacts locaux (générés)
 logs/
 cache/
+data/cache/
 *.parquet
 *.csv
+
+# Scripts de vérification manuelle (jetables, non versionnés)
+smoke_test.py
 
 # Secrets / environnement
 .env
