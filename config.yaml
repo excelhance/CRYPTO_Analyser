@@ -26,7 +26,7 @@ http:
   pool_timeout: 5.0
 
 gates:
-  min_quote_volume_24h: 1000000     # 1 M USDC / 24 h
+  min_quote_volume_24h: 500000       # 500 k USDC / 24 h (D6, calé par observation le 2026-07-11 : 46/284 paires au-dessus)
   min_bars_per_tf: 50               # un TF sous ce seuil est retiré (dégradation)
   ema200_min_bars: 200              # EMA200 calculée seulement si >= 200 bougies
 
