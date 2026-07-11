@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 from .config import AppConfig, CategoryWeightsCfg
@@ -80,7 +81,17 @@ RuleFunc = Callable[[pd.Series, "pd.Series | None", "AppConfig"], "RuleOutcome |
 
 
 def _missing(row: pd.Series, *columns: str) -> bool:
-    return any(pd.isna(row.get(c)) for c in columns)
+    """Une colonne est manquante si absente, NaN, OU infinie.
+
+    Une valeur infinie (ex. %B né d'une division par une largeur de bande
+    nulle) ne doit jamais franchir la couche indicateurs vers le scoring :
+    filet de sécurité en plus du traitement à la source dans indicators.py.
+    """
+    for c in columns:
+        value = row.get(c)
+        if pd.isna(value) or np.isinf(value):
+            return True
+    return False
 
 
 # --- Tendance ---

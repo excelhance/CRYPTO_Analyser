@@ -17,6 +17,7 @@ from scanner.scoring_engine import (
     _classify,
     _effective_category_weights,
     _make_cdl_rule,
+    _missing,
     _rule_alignement_ema,
     _rule_macd_signal_histogram,
     _rule_momentum_signe_pente,
@@ -60,6 +61,30 @@ def _row(**overrides) -> pd.Series:
     }
     base.update(overrides)
     return pd.Series(base)
+
+
+# =========================================================================== #
+# Garde-fou _missing() : NaN ET infinis (filet de sécurité, cf. bug %B)       #
+# =========================================================================== #
+def test_missing_helper_treats_nan_as_missing():
+    assert _missing(_row(rsi=float("nan")), "rsi") is True
+
+
+def test_missing_helper_treats_positive_infinity_as_missing():
+    assert _missing(_row(percent_b=float("inf")), "percent_b") is True
+
+
+def test_missing_helper_treats_negative_infinity_as_missing():
+    assert _missing(_row(rsi=float("-inf")), "rsi") is True
+
+
+def test_missing_helper_false_for_finite_value():
+    assert _missing(_row(rsi=50.0), "rsi") is False
+
+
+def test_percent_b_rule_omitted_when_infinite():
+    """Une valeur infinie ne doit jamais franchir la couche indicateurs vers le scoring."""
+    assert _rule_percent_b_reversion(_row(percent_b=float("inf")), None, _CFG) is None
 
 
 # =========================================================================== #

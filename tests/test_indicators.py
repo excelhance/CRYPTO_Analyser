@@ -1,6 +1,7 @@
 """Tests des indicateurs techniques (`indicators.py`, §3 CDC)."""
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -114,6 +115,40 @@ def test_derived_columns_are_consistent(cfg):
     assert last["atr_pct"] == pytest.approx(last["atr"] / last["close"])
     assert last["bb_width"] == pytest.approx((last["bb_upper"] - last["bb_lower"]) / last["bb_middle"])
     assert last["percent_b"] == pytest.approx((last["close"] - last["bb_lower"]) / (last["bb_upper"] - last["bb_lower"]))
+
+
+def test_zero_width_bollinger_band_omits_bbands_not_infinite_percent_b(cfg):
+    """Bande de largeur nulle (précision flottante à prix ultra-faible type PEPEUSDC,
+    ~2.6e-6 USDC, où bb_upper==bb_lower exactement) : bbands doit être omis pour cette
+    bougie, jamais un %B infini qui franchirait la couche indicateurs.
+
+    Reproduit à l'échelle réelle du bug : à un ordre de grandeur ~100, le résidu de
+    calcul de TA-Lib sur une fenêtre constante n'est pas exactement nul (~1e-5) ; à
+    ~1e-6 (échelle PEPEUSDC), la perte de précision float64 produit une égalité
+    bit-à-bit exacte — vérifié empiriquement avant d'écrire ce test."""
+    period = cfg.indicators.bbands.period
+    n = period + 30
+    varying = 2.6e-6 + np.cumsum(np.random.default_rng(1).normal(0, 1e-8, n - period))
+    flat_value = float(varying[-1])
+    # Prix parfaitement constant sur les `period` dernières bougies => stddev roulant nul
+    # sur la fenêtre finale => bb_upper == bb_lower exactement à cette échelle.
+    close = np.concatenate([varying, np.full(period, flat_value)])
+    open_time = pd.date_range("2020-01-01", periods=n, freq="D", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open_time": open_time, "open": close, "high": close, "low": close, "close": close,
+            "volume": np.full(n, 10.0), "close_time": open_time,
+        }
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # toute RuntimeWarning (ex. divide by zero) fait échouer le test
+        result = compute_indicators(df, cfg.indicators, cfg.gates)
+
+    assert "bbands" in result.omitted
+    assert "percent_b" not in result.data.columns
+    assert "bb_width" not in result.data.columns
+    assert "bb_upper" not in result.data.columns
 
 
 def test_compute_indicators_sorts_input_by_open_time(cfg):

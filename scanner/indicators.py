@@ -121,11 +121,15 @@ def compute_indicators(
         nbdevdn=indicators_cfg.bbands.stddev,
         matype=0,
     )
-    if _last_is_valid(bb_upper):
+    band_range = bb_upper - bb_lower
+    # Largeur de bande nulle sur la dernière bougie (précision flottante à prix
+    # ultra-faible, ex. memecoins à quelques millionièmes d'USDC : bb_upper==bb_lower
+    # exactement) : %B = (close-inf)/0 serait infini. Traité comme "bbands omis" pour
+    # cette bougie plutôt que de fabriquer un signal à partir d'une donnée indéfinie.
+    if _last_is_valid(bb_upper) and band_range[-1] != 0:
         data["bb_upper"] = bb_upper
         data["bb_middle"] = bb_middle
         data["bb_lower"] = bb_lower
-        band_range = bb_upper - bb_lower
         data["bb_width"] = band_range / bb_middle  # largeur = (sup-inf)/moyenne
         data["percent_b"] = (close - bb_lower) / band_range  # %B = (close-inf)/(sup-inf)
     else:
