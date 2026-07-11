@@ -83,6 +83,9 @@ class GatesCfg(_Base):
     min_quote_volume_24h: float = Field(ge=0, description="Volume quote 24 h minimal (USDC).")
     min_bars_per_tf: int = Field(ge=1, description="Sous ce nombre de bougies, un TF est retiré.")
     ema200_min_bars: int = Field(ge=1, description="EMA200 calculée seulement si >= ce nombre.")
+    max_level_without_reference_1d: Literal["neutre", "watch", "signal"] = Field(
+        description="Niveau plafond si la référence 1D est indisponible (donnée insuffisante)."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -326,6 +329,7 @@ class OutputCfg(_Base):
     format: Literal["csv"] = "csv"
     one_row_per: Literal["pair"] = "pair"
     timestamped: bool = True
+    directory: str = Field(min_length=1, description="Répertoire de sortie des CSV de scan.")
 
 
 # --------------------------------------------------------------------------- #

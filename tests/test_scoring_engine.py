@@ -528,6 +528,37 @@ def test_score_pair_1M_and_1w_missing_flags_context_insufficient(cfg_relaxed):
     assert result.score == pytest.approx(expected, rel=1e-6)
 
 
+def test_score_pair_reference_absente_distinct_from_context_insufficient_and_caps_level(cfg_relaxed):
+    """Référence 1D absente : la paire reste présente au classement (pas exclue), porte un
+    drapeau dédié distinct de 'contexte insuffisant', et son niveau est plafonné (jamais 'signal')."""
+    tf_indicators = {tf: _bullish_indicator_result() for tf in ALL_TFS if tf != "1d"}
+    result = score_pair(tf_indicators, cfg_relaxed)
+    full = score_pair({tf: _bullish_indicator_result() for tf in ALL_TFS}, cfg_relaxed)
+
+    assert result.excluded is False  # présente au classement, pas exclue
+    assert result.reference_absente is True
+    assert result.reference_class is None
+    assert "reference_1d_absente" in result.flags
+
+    assert result.context_insufficient is False  # 1w/1M présents => pas de contexte insuffisant
+    assert "contexte insuffisant" not in result.flags
+
+    assert full.level == "signal"  # sans l'absence de 1D, ce scénario pleinement haussier signalerait
+    assert result.level != "signal"
+    assert result.level == cfg_relaxed.gates.max_level_without_reference_1d
+
+
+def test_score_pair_reference_absente_and_context_insufficient_can_coexist(cfg_relaxed):
+    """Une paire peut cumuler les deux drapeaux (gravité distincte, mais pas exclusive)."""
+    tf_indicators = {"4h": _bullish_indicator_result(), "12h": _bullish_indicator_result()}
+    result = score_pair(tf_indicators, cfg_relaxed)
+
+    assert result.context_insufficient is True
+    assert result.reference_absente is True
+    assert set(result.flags) == {"contexte insuffisant", "reference_1d_absente"}
+    assert result.level != "signal"
+
+
 def test_score_pair_excluded_when_declenchement_entirely_absent(cfg_relaxed):
     tf_indicators = {
         "1d": _bullish_indicator_result(), "1w": _bullish_indicator_result(), "1M": _bullish_indicator_result(),

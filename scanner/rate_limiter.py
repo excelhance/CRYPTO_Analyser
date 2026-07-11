@@ -46,10 +46,21 @@ class RateLimiter:
         self._time = time_func
         self._sleep = sleep_func
         self._events: deque[tuple[float, int]] = deque()  # (horodatage, poids consommé)
+        self._total_consumed = 0  # cumulatif, jamais purgé (contrairement à `_events`)
 
     @property
     def max_retries(self) -> int:
         return self._max_retries
+
+    @property
+    def total_consumed(self) -> int:
+        """Poids total consommé par CE `RateLimiter` depuis sa création (jamais purgé).
+
+        Ne compte que les appels `acquire()` (les requêtes que ce processus a lui-même
+        émises) — pas les ajustements de `sync_from_headers` (qui peuvent refléter le
+        trafic d'un autre processus sur la même IP, hors périmètre d'un scan donné).
+        """
+        return self._total_consumed
 
     def _purge_expired(self) -> None:
         cutoff = self._time() - WINDOW_SECONDS
@@ -63,6 +74,7 @@ class RateLimiter:
             usage = sum(w for _, w in self._events)
             if usage + weight <= self._budget:
                 self._events.append((self._time(), weight))
+                self._total_consumed += weight
                 return
             oldest_ts = self._events[0][0]
             wait_seconds = (oldest_ts + WINDOW_SECONDS) - self._time()

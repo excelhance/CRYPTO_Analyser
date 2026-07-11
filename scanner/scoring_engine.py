@@ -62,7 +62,8 @@ class PairScoreResult:
     level: Literal["neutre", "watch", "signal"]
     excluded: bool
     exclusion_reason: str | None
-    context_insufficient: bool
+    context_insufficient: bool  # biais 1M/1W indisponible (dégradation §4.3)
+    reference_absente: bool  # référence 1D indisponible — gravité distincte, cf. flags
     biais_class: Classe | None
     reference_class: Classe | None
     declenchement_score: float | None
@@ -320,6 +321,9 @@ def score_timeframe(indicator_result: IndicatorResult, config: AppConfig) -> Tim
 # --------------------------------------------------------------------------- #
 # Consolidation multi-échelles (§4.3/4.4) : tiers, classification, m, score   #
 # --------------------------------------------------------------------------- #
+_LEVEL_ORDER = {"neutre": 0, "watch": 1, "signal": 2}
+
+
 def _classify(score: float, neutral_band: float) -> Classe:
     if score >= neutral_band:
         return "haussier"
@@ -373,7 +377,7 @@ def score_pair(timeframe_indicators: dict[str, IndicatorResult], config: AppConf
         return PairScoreResult(
             score=0.0, level="neutre", excluded=True,
             exclusion_reason="aucune donnée exploitable sur le tier déclenchement",
-            context_insufficient=False, biais_class=None, reference_class=None,
+            context_insufficient=False, reference_absente=False, biais_class=None, reference_class=None,
             declenchement_score=None, alignment_multiplier=0.0,
             timeframe_scores=tf_scores, flags=["exclue : déclenchement indisponible"],
         )
@@ -388,6 +392,7 @@ def score_pair(timeframe_indicators: dict[str, IndicatorResult], config: AppConf
     reference_tf_score = tf_scores.get(reference_tf)
     reference_score = reference_tf_score.s if reference_tf_score is not None else None
     reference_class = _classify(reference_score, neutral_band) if reference_score is not None else None
+    reference_absente = reference_class is None
 
     # Biais/référence indéterminés => traités comme neutres pour le multiplicateur m
     # (décision validée) ; le contexte insuffisant est pénalisé séparément ci-dessous.
@@ -397,7 +402,15 @@ def score_pair(timeframe_indicators: dict[str, IndicatorResult], config: AppConf
     facteur_contexte = config.context_insufficient_factor if context_insufficient else 1.0
     score_final = 100.0 * score_brut * facteur_contexte
 
-    flags = ["contexte insuffisant"] if context_insufficient else []
+    # Deux manques distincts, pas la même gravité : le biais 1M/1W absent (contexte
+    # insuffisant, déjà pénalisé ci-dessus par context_insufficient_factor) et la
+    # référence 1D absente (aucune pénalité multiplicative, mais plafond de niveau
+    # ci-dessous — trop peu de données pour laisser remonter un "signal" fort).
+    flags: list[str] = []
+    if context_insufficient:
+        flags.append("contexte insuffisant")
+    if reference_absente:
+        flags.append("reference_1d_absente")
 
     level: Literal["neutre", "watch", "signal"] = "neutre"
     if score_final >= config.thresholds.signal:
@@ -405,8 +418,14 @@ def score_pair(timeframe_indicators: dict[str, IndicatorResult], config: AppConf
     elif score_final >= config.thresholds.watch:
         level = "watch"
 
+    if reference_absente:
+        cap = config.gates.max_level_without_reference_1d
+        if _LEVEL_ORDER[level] > _LEVEL_ORDER[cap]:
+            level = cap
+
     return PairScoreResult(
         score=score_final, level=level, excluded=False, exclusion_reason=None,
-        context_insufficient=context_insufficient, biais_class=biais_class, reference_class=reference_class,
+        context_insufficient=context_insufficient, reference_absente=reference_absente,
+        biais_class=biais_class, reference_class=reference_class,
         declenchement_score=D, alignment_multiplier=m, timeframe_scores=tf_scores, flags=flags,
     )

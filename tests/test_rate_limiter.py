@@ -36,6 +36,18 @@ def _rate_limiter(budget: int, max_retries: int = 3, backoff: float = 1.0) -> tu
     return rl, clock
 
 
+def test_total_consumed_accumulates_across_calls_never_purged():
+    rl, clock = _rate_limiter(budget=1000)
+    rl.acquire(20)
+    rl.acquire(80)
+    assert rl.total_consumed == 100
+    clock.now += WINDOW_SECONDS * 2  # la fenêtre glissante se serait purgée entre-temps
+    rl.current_usage()  # force une purge de `_events`
+    assert rl.total_consumed == 100  # total_consumed n'est jamais purgé, contrairement à current_usage()
+    rl.acquire(5)
+    assert rl.total_consumed == 105
+
+
 def test_acquire_does_not_block_below_budget():
     rl, clock = _rate_limiter(budget=100)
     rl.acquire(20)

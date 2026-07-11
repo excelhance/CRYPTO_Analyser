@@ -51,3 +51,7 @@ Colonne `mom` conservée en valeur brute (affichage). Le scoring utilise **signe
 - Les tests unitaires prouvent la **cohérence**, pas la **justesse** : confronter au réel (Binance, œil humain) à chaque lot.
 - Tout paramètre reste dans `config.yaml` — aucune constante magique.
 - Ne jamais calibrer un réglage sur un instantané de marché (§7 du CDC — sur-optimisation).
+
+
+## Lot 4 — trou de spéc « référence 1D absente ». 
+Le CDC §5 gérait le biais manquant (1M/1W) mais pas l'absence de la référence 1D elle-même. Décision (option 2) : garder la paire au classement mais la marquer (reference_1d_absente, drapeau distinct de « contexte insuffisant ») et plafonner son niveau à watch (gates.max_level_without_reference_1d). 1 paire concernée au scan du 11/07 (GRAMUSDC).

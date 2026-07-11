@@ -1,12 +1,14 @@
-"""Point d'entrée en ligne de commande (Lot 0).
+"""Point d'entrée en ligne de commande.
 
 Commandes :
   check  — valide le fichier de configuration et affiche un résumé.
   show   — affiche la configuration normalisée (JSON).
+  scan   — lance un scan complet (univers, gate, indicateurs, scoring, restitution).
 
 Usage :
   python -m scanner.cli check [--config config.yaml]
   python -m scanner.cli show  [--config config.yaml]
+  python -m scanner.cli scan  [--config config.yaml] [--force-refresh]
 """
 from __future__ import annotations
 
@@ -20,6 +22,9 @@ from rich.console import Console
 # capturée/redirigée (cf. docstring de `_force_utf8_streams`).
 from .config import AppConfig, load_config
 from .logging_setup import setup_logging
+from .rate_limiter import BinanceBannedError
+from .reporting import print_console_table, write_csv
+from .scanner import run_scan
 
 app = typer.Typer(
     add_completion=False,
@@ -82,6 +87,31 @@ def show(
     setup_logging(level="WARNING")
     cfg = _load_or_exit(config)
     console.print_json(data=cfg.model_dump(mode="json"))
+
+
+@app.command()
+def scan(
+    config: str = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Chemin du YAML de configuration."),
+    force_refresh: bool = typer.Option(
+        False, "--force-refresh", help="Ignore le cache, retélécharge tout l'historique (D3)."
+    ),
+) -> None:
+    """Lance un scan complet : univers, gate D6, indicateurs, scoring, restitution console+CSV."""
+    log = setup_logging()
+    cfg = _load_or_exit(config)
+    if force_refresh:
+        cfg = cfg.model_copy(update={"cache": cfg.cache.model_copy(update={"mode": "force_refresh"})})
+
+    try:
+        result = run_scan(cfg)
+    except BinanceBannedError as exc:
+        console.print(f"[bold red]Scan interrompu : {exc}[/]")
+        raise typer.Exit(code=1) from exc
+
+    print_console_table(result, console=console)
+    csv_path = write_csv(result, cfg)
+    log.info("CSV exporté : %s", csv_path)
+    console.print(f"[bold green]CSV exporté :[/] {csv_path}")
 
 
 if __name__ == "__main__":
