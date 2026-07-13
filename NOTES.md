@@ -36,6 +36,21 @@ La largeur des bandes (`bb_width`) est actuellement **non-scorante** (exposée e
 ### Momentum (MOM) — normalisation
 Colonne `mom` conservée en valeur brute (affichage). Le scoring utilise **signe + pente uniquement**, jamais la valeur absolue (non comparable entre paires, §3.2). Point de vigilance permanent si on retouche la règle `momentum_signe_pente`.
 
+### Lot 4 — trou de spéc « référence 1D absente ». 
+Le CDC §5 gérait le biais manquant (1M/1W) mais pas l'absence de la référence 1D elle-même. Décision (option 2) : garder la paire au classement mais la marquer (reference_1d_absente, drapeau distinct de « contexte insuffisant ») et plafonner son niveau à watch (gates.max_level_without_reference_1d). 1 paire concernée au scan du 11/07 (GRAMUSDC).
+
+### Portée du scoring : suiveur de tendance uniquement — archétype « retour à la moyenne » en réserve
+
+**Constat (13/07, WLDUSDC).** WLD score ~0 (déclenchement plat H4/H12 + référence 1D baissière → `contradiction`, m=0,2) alors qu'une lecture discrétionnaire (rebond sur support 0,35-0,36, hammer hebdo, + thèse fondamentale OpenAI/IPO) invitait à l'entrée.
+
+**Explication — ce n'est PAS un défaut.** L'outil est un **suiveur de tendance** (approche B, §4.4 du CDC) : il décline volontairement les entrées à contre-tendance. Le multiplicateur `contradiction` EST le mécanisme qui refuse un long tant que la tendance supérieure (1D) reste baissière. WLD relève d'une entrée **retour à la moyenne + catalyseur** — une stratégie opposée, que l'outil n'est pas conçu pour capter.
+
+**Limite permanente à retenir.** L'outil sera systématiquement muet ou négatif sur : rebonds de support, retournements, achats de creux, survente. Ces setups n'y scoreront jamais bien — par construction. Ce n'est pas à corriger.
+
+**Garde-fou (§7).** Ne JAMAIS retoucher le calibrage (seuils, `contradiction`, `neutral_band`) pour faire remonter une paire qu'on détient déjà — sur-ajustement caractérisé.
+
+**Option en réserve — à spécifier À FROID, après la phase d'observation, jamais en réaction à une position en cours :** un second profil de scoring « retour à la moyenne / achat de creux » (archétype distinct), activable explicitement, qui *récompenserait* le %B extrême en support, le hammer et la survente au lieu de les pénaliser. Ce serait une option séparée, pas une modification du profil tendance existant.
+
 ---
 
 ## ✅ Historique des lots
@@ -62,5 +77,3 @@ Colonne `mom` conservée en valeur brute (affichage). Le scoring utilise **signe
 - Ne jamais calibrer un réglage sur un instantané de marché (§7 du CDC — sur-optimisation).
 
 
-## Lot 4 — trou de spéc « référence 1D absente ». 
-Le CDC §5 gérait le biais manquant (1M/1W) mais pas l'absence de la référence 1D elle-même. Décision (option 2) : garder la paire au classement mais la marquer (reference_1d_absente, drapeau distinct de « contexte insuffisant ») et plafonner son niveau à watch (gates.max_level_without_reference_1d). 1 paire concernée au scan du 11/07 (GRAMUSDC).
