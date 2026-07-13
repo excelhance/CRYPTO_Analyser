@@ -1,9 +1,18 @@
 # NOTES.md — Carnet de bord du projet
 
+-------------------------------------------------------------------------
+
+# ⚙️ UTILISATION DE L'OUTIL ⚙️
+1) Ouvrir VS Code sur le dossier du projet
+2) Terminal → New Terminal, puis activer l'environnement :
+    .\.venv\Scripts\Activate.ps1
+3) Lancer le scan :
+    python -m scanner.cli scan
+
 Journal des décisions différées, points d'observation et arbitrages à revoir.
 Ce fichier est documentaire : il n'est lu ni par le code ni par le scoring.
 
----
+-------------------------------------------------------------------------
 
 ## ⏳ Décisions différées (à trancher après observation, PAS maintenant)
 
