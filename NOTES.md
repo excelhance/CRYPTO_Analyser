@@ -8,6 +8,11 @@
     .\.venv\Scripts\Activate.ps1
 3) Lancer le scan :
     python -m scanner.cli scan
+4) (Optionnel) Générer le prompt fondamental sur la shortlist du dernier scan :
+    python -m scanner.cli fundamentals
+    → écrit un .md prêt à coller dans l'interface Claude (Mode A, §5.3 CDC) et
+      l'affiche aussi en console. Aucun appel API, aucune clé Anthropic requise
+      (juste COINGECKO_DEMO_KEY dans .env).
 
 Journal des décisions différées, points d'observation et arbitrages à revoir.
 Ce fichier est documentaire : il n'est lu ni par le code ni par le scoring.
@@ -59,6 +64,22 @@ Le CDC §5 gérait le biais manquant (1M/1W) mais pas l'absence de la référenc
 - **Lot 1 — Couche données.** `data_fetcher` (exchangeInfo + ticker/24hr + klines), `rate_limiter`, `cache` parquet incrémental. Validé en conditions réelles (poids consommé = 102 = 20+80+2, univers = 284 paires, bougie en cours exclue).
 - **Lot 2 — Indicateurs (TA-Lib).** Jeu §3.2 + dérivés, dégradation gracieuse. Validé : **RSI et MACD de BTCUSDC 1d confirmés identiques à Binance** (la validation qui prouve la justesse de toute la chaîne). Correctif encodage UTF-8 (Windows/cp1252) ajouté dans `scanner/__init__.py`.
 - **Lot 3 — Scoring + consolidation.** 14 règles / 5 catégories, modulation ADX, consolidation approche B, décomposition complète. Validé : mécanique (102 tests) + **ordre du classement jugé correct à l'œil sur données réelles** (ZEC en tête). Bug d'infini (`percent_b` sur bande nulle, memecoins) corrigé.
+- **Lot 4 — Restitution.** `reporting` : tableau console (rich) + export CSV horodaté, une ligne par paire (§6.2 CDC). Validé.
+- **Lot 5 — Fondamental.** Direction changée en cours de route, voir « Historique Mode B → Mode A » ci-dessous. État final : **Mode A**, aucun appel API/LLM depuis le script.
+
+---
+
+## 🔀 Historique Mode B → Mode A (Lot 5)
+
+1. **Implémenté d'abord en Mode B** : appel automatisé de l'API Anthropic (`claude-sonnet-5`) avec outil de recherche web, synthèse JSON, estimateur de coût pire cas (boucle serveur `pause_turn`, `max_continuations`, `web_search_max_uses`).
+2. **Garde-fou dollars ajouté** : `max_estimated_cost_usd_per_run` (bloque même `--yes`, contrairement au plafond en tokens qui se déclenchait systématiquement).
+3. **Prompt de synthèse corrigé** après constat sur la synthèse WLD réelle : faits exacts mais sources faibles citées (CoinMarketCap AI Insights, agrégateurs générés par IA) alors que les mêmes faits existaient en source primaire/réputée. Ajout : hiérarchie de sources (primaire > presse réputée > reste), interdiction des agrégateurs IA, étiquetage `[primaire]/[réputée]/[faible]` par affirmation.
+4. **Fausse alerte investiguée et clarifiée** : une estimation de coût qui semblait avoir doublé (sortie/entrée réinjectée/recherches web ×2) n'était **pas un bug** — la shortlist comparée était passée de 1 à 2 tokens (`test_2tokens.csv`), pas `calls_per_token` doublé. Un test de verrouillage (`max_continuations=3` → exactement 4 appels/token) a été ajouté pour lever le doute plus vite la prochaine fois.
+5. **Mode B finalement abandonné** : complexité et coût de l'estimateur disproportionnés pour l'usage réel. Choix retenu : garder l'humain dans la boucle plutôt qu'un estimateur automatisé.
+6. **Bascule en Mode A** (§5.3 CDC) : le script résout les tokens et récupère les données dures (CoinGecko + DefiLlama), puis compose un **prompt unique** pour toute la shortlist — à coller manuellement dans l'interface Claude. Aucun appel API, aucune clé Anthropic, aucun coût côté script.
+7. Le cadrage anti-hallucination et la hiérarchie de sources du Mode B sont **repris dans le prompt Mode A** (rien perdu), avec deux renforts supplémentaires : une étiquette `[primaire]`/`[réputée]` n'est valide que si la source est nommable (sinon rétrogradée en `[faible/non vérifié]`), et l'aveu d'ignorance (« aucune source fiable trouvée ») est explicitement exigé plutôt que de combler un manque par une source mal étiquetée.
+8. Documentation resynchronisée en conséquence : `docs/CDC.md` §5.3 (avec encart « Historique de décision »), `README.md`, `CLAUDE.md` (tracker Lots 0-6 entièrement remis à jour, plus seulement Lot 0).
+9. Validé en conditions réelles (`python -m scanner.cli fundamentals --csv output\test_2tokens.csv`) : données CoinGecko/DefiLlama réelles récupérées, `.md` exporté + affichage console, sans clé Anthropic.
 
 ---
 
@@ -75,5 +96,7 @@ Le CDC §5 gérait le biais manquant (1M/1W) mais pas l'absence de la référenc
 - Les tests unitaires prouvent la **cohérence**, pas la **justesse** : confronter au réel (Binance, œil humain) à chaque lot.
 - Tout paramètre reste dans `config.yaml` — aucune constante magique.
 - Ne jamais calibrer un réglage sur un instantané de marché (§7 du CDC — sur-optimisation).
+- Avant de soupçonner une régression de calcul entre deux runs, vérifier d'abord si l'**entrée** a changé (ex. taille de la shortlist) — cf. fausse alerte du doublement de coût, Lot 5.
+- Préférer un humain dans la boucle à un estimateur/automatisme complexe quand l'un et l'autre atteignent le même but (cf. abandon du Mode B au profit du Mode A).
 
 
