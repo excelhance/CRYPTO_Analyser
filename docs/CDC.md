@@ -18,14 +18,14 @@
 | Gate de liquidité (D6) | ≥ **1 M USDC** / 24 h (volume de la paire /USDC) |
 | Config scoring (D7) | Fournie par défaut (§4.6), à caler **par observation, pas par backtest** |
 | Sources fondamentales (D8) | **CoinGecko** (clé démo) + **DefiLlama** ; actus FR+EN via recherche web de Claude |
-| Synthèse (D9) | **Mode B** (API Anthropic), modèle `claude-sonnet-5`, sortie JSON |
+| Synthèse (D9) | **Mode A** (prompt généré, collé manuellement dans Claude) ; Mode B (API Anthropic) tenté puis abandonné — voir §5.3 |
 | Restitution (D10) | **CSV** unique, **une ligne par paire** |
 
 ---
 
 ## 0. Cadrage
 
-**Objet.** Scanner l'ensemble des paires `*/USDC` du Spot Binance, calculer les indicateurs sur 5 unités de temps, produire un **score d'opportunité long consolidé** par paire selon des règles explicites et configurables, et restituer un classement. Pour les meilleurs candidats, assister une revue fondamentale (Mode B).
+**Objet.** Scanner l'ensemble des paires `*/USDC` du Spot Binance, calculer les indicateurs sur 5 unités de temps, produire un **score d'opportunité long consolidé** par paire selon des règles explicites et configurables, et restituer un classement. Pour les meilleurs candidats, assister une revue fondamentale (Mode A).
 
 **Ce que l'outil fait :** produit des **signaux hiérarchisés** et une matière première d'analyse.
 **Ce que l'outil ne fait pas :** aucun ordre, aucun portefeuille, aucune décision, aucun signal short.
@@ -80,8 +80,12 @@
                  │ fundamentals │  données marché/tokenomics/TVL              │
                  │ (CoinGecko,  │                                             ▼
                  │  DefiLlama)  │                                    ┌──────────────────┐
-                 └──────┬───────┘   appel API + recherche web        │ Claude Sonnet 5  │
-                        └──────────────────────────────────────────▶│ (synthèse JSON)  │
+                 └──────┬───────┘   prompt unique (Mode A)           │ .md exporté +    │
+                        └──────────────────────────────────────────▶│ affiché console  │
+                                     (à coller manuellement          │ (collé dans      │
+                                      dans l'interface Claude)       │  l'interface     │
+                                                                     │  Claude par      │
+                                                                     │  l'utilisateur)  │
                                                                      └──────────────────┘
 ```
 
@@ -94,7 +98,7 @@
 | `indicators` | Calculer les indicateurs par TF (couche mince au-dessus de TA-Lib) |
 | `scoring_engine` | Score par TF → **consolidation multi-échelles** → score + décomposition |
 | `scanner` | Orchestrer le pipeline, appliquer les *gates* |
-| `fundamentals` | Enrichir la shortlist + appeler la synthèse Claude (Mode B) |
+| `fundamentals` | Enrichir la shortlist + générer le prompt de synthèse (Mode A) |
 | `reporting` | Restituer (console + CSV) |
 
 ### 1.2 Flux de données
@@ -104,7 +108,7 @@
 3. Par symbole et par TF : bougies via cache, sinon `data_fetcher` sous contrôle du `rate_limiter`.
 4. `indicators` enrichit chaque DataFrame (par TF).
 5. `scoring_engine` : score directionnel par TF → consolidation → score long 0–100 + décomposition.
-6. `reporting` trie par score ; les *N* premiers passent par `fundamentals` puis la synthèse Claude.
+6. `reporting` trie par score ; les *N* premiers passent par `fundamentals`, qui génère le prompt à coller dans Claude.
 
 ### 1.3 Principes transverses
 
@@ -312,12 +316,10 @@ context_insufficient_factor: 0.5
 # === Seuils de restitution ===
 thresholds: { watch: 55, signal: 70 }
 
-# === Fondamental (Mode B) ===
+# === Fondamental (Mode A — génère un prompt, aucun appel API Anthropic) ===
 fundamentals:
   enabled: true
   top_n: 10
-  model: claude-sonnet-5
-  web_search: true
   sources:
     coingecko: { demo_key_env: COINGECKO_DEMO_KEY }
     defillama: { enabled: true }
@@ -334,7 +336,7 @@ Par paire : `score consolidé 0–100`, `niveau` (neutre / watch / signal), les 
 
 ---
 
-## 5. Analyse fondamentale (Mode B)
+## 5. Analyse fondamentale (Mode A)
 
 Déclenchée **uniquement** sur la shortlist technique (`top_n`), pour ne pas solliciter les API tierces sur des centaines de tokens.
 
@@ -355,12 +357,14 @@ Déclenchée **uniquement** sur la shortlist technique (`top_n`), pour ne pas so
 - **DefiLlama** — TVL, gratuit, sans clé.
 - **Actus/narratif** — pas d'API dédiée : la synthèse s'appuie sur la **recherche web de Claude** (Cryptoast / Journal du Coin en FR ; CoinDesk / The Block / Messari en EN).
 
-### 5.3 Synthèse par Claude — Mode B (D9)
+### 5.3 Génération du prompt — Mode A (D9)
 
-- Le script appelle l'**API Anthropic** (`claude-sonnet-5`) avec : les données structurées (CoinGecko + DefiLlama) **et** l'**outil de recherche web** activé pour l'actualité.
-- **Prérequis :** clé API Anthropic (distincte de l'abonnement Claude) + coût par exécution assumé.
-- **Sortie :** synthèse en **JSON structuré** (ex. `resume`, `points_positifs`, `points_vigilance`, `catalyseurs`, `sources`) réinjectée dans le rapport. Parsing défensif (strip des éventuels délimiteurs ``` avant `json.loads`).
-- **Garde-fou :** une synthèse LLM peut halluciner et les actus peuvent être datées → chaque donnée est **horodatée** et **revérifiée à la source primaire** avant toute décision. La synthèse est une aide à la lecture, pas une vérité.
+> **Historique de décision.** Le Mode B (appel automatisé de l'API Anthropic avec outil de recherche web) a été implémenté puis abandonné : la complexité et le coût de l'estimateur de pire cas (boucle serveur `pause_turn`, réinjection de l'historique complet à chaque relance) étaient disproportionnés au regard de l'usage réel. Choix retenu : garder l'humain dans la boucle plutôt qu'un estimateur de coût automatisé.
+
+- Le script ne fait **aucun appel à un modèle de langage**. Il résout et récupère les données dures (CoinGecko + DefiLlama) pour toute la shortlist (`top_n`), puis compose un **prompt unique** couvrant tous les tokens.
+- Le prompt intègre : les données dures formatées par token, le cadrage anti-hallucination (distinction données dures / synthèse web), la hiérarchie de sources (primaire > presse réputée > reste, agrégateurs générés par IA interdits comme source), l'étiquetage de fiabilité par affirmation (`[primaire]`/`[réputée]`/`[faible/non vérifié]`), l'exigence de source primaire pour l'on-chain granulaire, la parité de traitement baissier/haussier, et le canevas Markdown de réponse attendu.
+- **Sortie du script :** un fichier `.md` horodaté contenant le prompt prêt à copier, affiché aussi en console. **Prérequis :** aucune clé Anthropic — uniquement `COINGECKO_DEMO_KEY`.
+- **Garde-fou :** la synthèse produite par l'utilisateur (via son interface Claude) reste une **aide à la lecture à revérifier à la source**, jamais une décision — rappelé explicitement dans le prompt lui-même.
 
 ---
 
@@ -416,7 +420,7 @@ Chaque lot est **livrable et testable seul**. Ne pas démarrer un lot sans le cr
 | **2 — Indicateurs** | `indicators` (wrap TA-Lib) + dérivés, gestion des indicateurs omis selon TF | Valeurs cohérentes vs référence (contrôle sur 1 paire) ; `NaN`/omissions gérés |
 | **3 — Scoring** | (a) score directionnel par TF (ADX modulé) ; (b) **consolidation multi-échelles** + dégradation ; décomposition | Modifier un poids YAML change le score sans toucher au code ; décomposition lisible ; dégradation 1M→1W vérifiée |
 | **4 — Restitution** | `reporting` console + CSV (une ligne/paire) | CSV réexploitable, tri par score correct |
-| **5 — Fondamental (Mode B)** | `fundamentals` (CoinGecko + DefiLlama) + appel `claude-sonnet-5` avec recherche web, parsing JSON | Synthèse structurée par token, données horodatées, parsing robuste |
+| **5 — Fondamental (Mode A)** | `fundamentals` (CoinGecko + DefiLlama) + génération d'un prompt unique pour la shortlist (Mode B tenté puis abandonné, §5.3) | Prompt généré contient les données dures de chaque token + le cadrage de sourçage, `.md` horodaté + affichage console |
 | **6 — Options** | Dashboard `streamlit`, backtest léger (`data.binance.vision`) | Selon priorités |
 
 ---
@@ -433,7 +437,7 @@ Chaque lot est **livrable et testable seul**. Ne pas démarrer un lot sans le cr
 | **D6** | Gate de liquidité | ≥ 1 M USDC / 24 h |
 | **D7** | Config scoring | Défauts §4.6, à caler par observation (pas par backtest) |
 | **D8** | Sources fondamentales | CoinGecko (clé démo) + DefiLlama · actus FR+EN via recherche web |
-| **D9** | Synthèse | Mode B · `claude-sonnet-5` · JSON structuré |
+| **D9** | Synthèse | **Mode A** · prompt généré, collé manuellement dans Claude (Mode B/API Anthropic tenté puis abandonné, §5.3) |
 | **D10** | Restitution | CSV unique, une ligne par paire |
 
 ---

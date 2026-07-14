@@ -1,39 +1,35 @@
-"""Analyse fondamentale — Mode B (§5 CDC).
+"""Analyse fondamentale — Mode A (§5 CDC).
 
 Déclenché **uniquement** à la demande, sur la shortlist d'un scan (jamais tout
-l'univers — les API tierces et l'API Anthropic sont payantes). Trois sources :
+l'univers — les API tierces restent sollicitées avec parcimonie). Deux sources
+de données dures, gratuites/quasi gratuites :
 - CoinGecko (tier Demo) : catégorie/narratif, market cap, volume 24h, supply, FDV.
 - DefiLlama (gratuit) : TVL, si le token est un protocole DeFi référencé.
-- Recherche web de Claude (`claude-sonnet-5`) : actualité/narratif FR+EN, synthèse JSON.
 
-Architecture en deux temps, pour ne jamais dépenser sans confirmation explicite :
-- `prepare_run` : résout les tokens, récupère les données de marché (peu coûteux),
-  construit les prompts et mesure leur coût réel via `count_tokens` (gratuit) ->
-  produit un `FundamentalsRunPlan` avec une estimation de coût AVANT tout appel payant.
-- `execute_run` : consomme le plan et déclenche les appels de synthèse Claude.
+Le script ne fait plus aucun appel à un modèle de langage : il prépare les
+données et compose un **prompt unique prêt à coller** dans l'interface Claude
+de l'utilisateur, qui reste dans la boucle (lecture, jugement, coût maîtrisé
+par lui, pas par un estimateur). Voir docs/CDC.md §5.3 "Historique de décision"
+pour les raisons de l'abandon du Mode B (appel API automatisé).
 
-Dégradation gracieuse à chaque étage : une source en échec ou un token non résolu
-ne fait jamais planter le run, seulement la partie concernée de la synthèse.
+Dégradation gracieuse à chaque étage : une source en échec ou un token non
+résolu ne fait jamais planter le run, seulement la partie concernée du prompt
+pour ce token (le prompt le signale explicitement plutôt que d'inventer).
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
 
-from .config import AppConfig, CoingeckoCfg, DefillamaCfg, FundamentalsCfg
-
-if TYPE_CHECKING:
-    import anthropic
+from .config import AppConfig, CoingeckoCfg, DefillamaCfg
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +40,7 @@ _DISCLAIMER = (
 
 
 class FundamentalsConfigError(RuntimeError):
-    """Configuration incomplète pour lancer le fondamental (clé API manquante, etc.)."""
+    """Configuration incomplète pour préparer le prompt (clé API manquante, etc.)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -103,72 +99,22 @@ class CoingeckoMarketData:
 
 
 @dataclass
-class LlmSynthesis:
-    resume: str | None
-    points_positifs: list[str]
-    points_vigilance: list[str]
-    catalyseurs: list[str]
-    sources: list[str]
-    date_donnees: str | None
-    raw_text: str
-
-
-@dataclass
-class TokenUsage:
-    input_tokens: int = 0
-    output_tokens: int = 0
-    web_search_calls: int = 0
-
-
-@dataclass
-class TokenPlan:
-    """Données rassemblées pour un token, avant le déclenchement de l'appel payant."""
+class TokenSnapshot:
+    """Données dures rassemblées pour un token de la shortlist, avant mise en prompt."""
 
     symbol: str
     resolved: ResolvedToken | None
     market_data: CoingeckoMarketData | None
     tvl_usd: float | None
-    prompt: str
-    estimated_input_tokens: int
     errors: list[str] = field(default_factory=list)
     fetched_at: datetime = field(default_factory=_utc_now)
 
 
 @dataclass
-class FundamentalsRunPlan:
-    tokens: list[TokenPlan]
-    estimated_input_tokens: int
-    estimated_max_output_tokens: int
-    estimated_max_web_searches: int
-    estimated_cost_usd: float
-    over_budget: bool
-
-
-@dataclass
-class TokenFundamentals:
-    symbol: str
-    resolved: ResolvedToken | None
-    market_data: CoingeckoMarketData | None
-    tvl_usd: float | None
-    synthesis: LlmSynthesis | None
-    usage: TokenUsage
-    errors: list[str]
-    fetched_at: datetime
-
-
-@dataclass
-class RunUsageSummary:
-    total_input_tokens: int
-    total_output_tokens: int
-    estimated_cost_usd: float
-    web_search_calls: int
-
-
-@dataclass
-class FundamentalsReport:
+class FundamentalsPromptResult:
     generated_at: datetime
-    tokens: list[TokenFundamentals]
-    usage: RunUsageSummary
+    tokens: list[TokenSnapshot]
+    prompt: str
 
 
 # --------------------------------------------------------------------------- #
@@ -302,180 +248,140 @@ def find_tvl_by_gecko_id(protocols: list[dict[str, Any]], coingecko_id: str) -> 
 
 
 # --------------------------------------------------------------------------- #
-# Construction du prompt — cadrage anti-hallucination strict                   #
+# Construction du prompt — cadrage anti-hallucination strict (Mode A)          #
 # --------------------------------------------------------------------------- #
 def _fmt(value: Any) -> str:
     return "non disponible" if value is None else str(value)
 
 
-def build_synthesis_prompt(
-    symbol: str,
-    resolved: ResolvedToken | None,
-    market_data: CoingeckoMarketData | None,
-    tvl_usd: float | None,
-    fetched_at: datetime,
-) -> str:
-    lines = [
-        f"Tu analyses le token crypto {symbol} (Binance Spot /USDC) pour un outil d'aide à la "
-        "décision technique. Ceci n'est PAS un conseil en investissement.",
-        "",
-        "=== DONNÉES DURES (mesurées, datées, source CoinGecko/DefiLlama) ===",
-        f"Horodatage de collecte (UTC) : {fetched_at.isoformat()}",
-    ]
-    if resolved is not None:
-        lines.append(f"Identifiant CoinGecko : {resolved.coingecko_id} ({resolved.name})")
+def _token_hard_data_block(token: TokenSnapshot) -> str:
+    lines = [f"### {token.symbol}"]
+    if token.resolved is not None:
+        lines.append(f"Identifiant CoinGecko : {token.resolved.coingecko_id} ({token.resolved.name})")
     else:
         lines.append("Identifiant CoinGecko : non résolu (aucun candidat fiable trouvé)")
-    if market_data is not None:
+    if token.market_data is not None:
+        md = token.market_data
         lines += [
-            f"Catégories/narratif : {', '.join(market_data.categories) or 'non disponible'}",
-            f"Capitalisation (USD) : {_fmt(market_data.market_cap_usd)}",
-            f"Rang par capitalisation : {_fmt(market_data.market_cap_rank)}",
-            f"Volume 24h (USD) : {_fmt(market_data.volume_24h_usd)}",
-            f"Supply circulante : {_fmt(market_data.circulating_supply)}",
-            f"Supply totale : {_fmt(market_data.total_supply)}",
-            f"Supply max : {_fmt(market_data.max_supply)}",
-            f"FDV (USD) : {_fmt(market_data.fully_diluted_valuation_usd)}",
+            f"Catégories/narratif : {', '.join(md.categories) or 'non disponible'}",
+            f"Capitalisation (USD) : {_fmt(md.market_cap_usd)}",
+            f"Rang par capitalisation : {_fmt(md.market_cap_rank)}",
+            f"Volume 24h (USD) : {_fmt(md.volume_24h_usd)}",
+            f"Supply circulante : {_fmt(md.circulating_supply)}",
+            f"Supply totale : {_fmt(md.total_supply)}",
+            f"Supply max : {_fmt(md.max_supply)}",
+            f"FDV (USD) : {_fmt(md.fully_diluted_valuation_usd)}",
         ]
     else:
         lines.append("Données de marché CoinGecko : non disponibles (échec de récupération)")
-    lines.append(f"TVL DefiLlama (USD) : {_fmt(tvl_usd)}")
-    lines += [
+    lines.append(f"TVL DefiLlama (USD) : {_fmt(token.tvl_usd)}")
+    lines.append(f"Horodatage de collecte (UTC) : {token.fetched_at.isoformat()}")
+    if token.errors:
+        lines.append(f"Anomalies de collecte : {'; '.join(token.errors)}")
+    return "\n".join(lines)
+
+
+def build_shortlist_prompt(tokens: Sequence[TokenSnapshot], generated_at: datetime) -> str:
+    """Compose le prompt unique couvrant toute la shortlist, prêt à coller dans Claude.
+
+    Un seul prompt pour tous les tokens (pas un par token) : les données dures de
+    chacun sont listées, suivies d'un unique bloc de consignes de sourçage et du
+    format de réponse attendu (canevas Markdown, une section par token).
+    """
+    symbols = [t.symbol for t in tokens]
+    lines = [
+        "Tu prépares une revue fondamentale de plusieurs tokens crypto (Binance Spot "
+        "/USDC) pour un outil d'aide à la décision technique. Ceci n'est PAS un conseil "
+        "en investissement.",
+        f"Horodatage de génération du prompt (UTC) : {generated_at.isoformat()}",
+        f"Tokens à analyser, dans cet ordre : {', '.join(symbols)}.",
         "",
-        "=== CONSIGNES STRICTES (à respecter impérativement) ===",
+        "=== DONNÉES DURES PAR TOKEN (mesurées, datées, source CoinGecko/DefiLlama) ===",
+        "",
+    ]
+    for token in tokens:
+        lines.append(_token_hard_data_block(token))
+        lines.append("")
+    lines += [
+        "=== CONSIGNES STRICTES (à respecter impérativement, pour CHAQUE token) ===",
         "1. Distingue toujours explicitement les DONNÉES DURES ci-dessus (chiffrées, datées) de ta "
         "SYNTHÈSE WEB (interprétation, actualité, narratif) — ne les mélange jamais dans une même "
         "affirmation sans préciser laquelle des deux tu utilises.",
-        "2. Utilise l'outil de recherche web pour l'actualité récente (sources FR : Cryptoast, Journal "
-        "du Coin ; sources EN : CoinDesk, The Block, Messari). Chaque affirmation d'actualité ou de "
-        "catalyseur DOIT être sourcée par un nom de média vérifiable ou un lien précis — aucune "
-        "affirmation d'actualité non sourcée.",
-        "3. N'invente JAMAIS un chiffre, une date ou un fait. Si une donnée est manquante, incertaine "
-        "ou que tu ne l'as pas trouvée via la recherche web, écris explicitement « non disponible » "
+        "2. Hiérarchie des sources, à respecter strictement dans tes recherches et citations : "
+        "(a) PRIMAIRE — dépôt réglementaire (ex. SEC), blog officiel du projet/de la fondation, "
+        "annonce officielle ; (b) RÉPUTÉE — presse spécialisée reconnue (CoinDesk, The Block, "
+        "Messari, Reuters ; FR : Cryptoast, Journal du Coin) ; (c) FAIBLE OU NON VÉRIFIÉE — tout le "
+        "reste. Privilégie explicitement (a) et (b) ; ne te contente jamais de (c) si un fait "
+        "existe en source primaire ou réputée.",
+        "3. INTERDIT de citer comme source un agrégateur généré par IA (ex. « CoinMarketCap AI "
+        "Insights », « Rhea-AI » ou équivalent) : c'est un résumé automatique non audité, pas une "
+        "vérification. Si tu ne trouves un fait que via un tel agrégateur, cherche la source "
+        "primaire ou réputée sous-jacente ; à défaut, écris « non vérifié » plutôt que de citer "
+        "l'agrégateur.",
+        "4. Étiquette CHAQUE affirmation d'actualité ou de catalyseur par son niveau de fiabilité "
+        "entre crochets en fin de phrase — [primaire], [réputée] ou [faible/non vérifié] — pour "
+        "que le lecteur voie d'un coup d'œil ce qui est solide. Chaque affirmation DOIT aussi être "
+        "sourcée par un nom de média/organisme vérifiable ou un lien précis. Une étiquette "
+        "[primaire] ou [réputée] n'est valide QUE si tu peux nommer précisément la source "
+        "(média/organisme) et, idéalement, fournir le lien ; une affirmation étiquetée [réputée] "
+        "sans source nommable doit être rétrogradée en [faible/non vérifié].",
+        "5. Toute statistique on-chain granulaire (flux, nombre d'adresses, montants précis, etc.) "
+        "exige une source primaire vérifiable ; à défaut, écris « non vérifié » plutôt que de la "
+        "reprendre telle quelle depuis une source secondaire ou un agrégateur.",
+        "6. Traite le contexte baissier avec la même rigueur et la même profondeur que les "
+        "catalyseurs positifs : performance historique du prix (ex. distance à l'ATH, tendance "
+        "récente), et ampleur RÉELLE d'un catalyseur en termes de flux/montants (pas seulement son "
+        "existence). 'Points de vigilance' ne doit jamais être plus court ou plus vague que "
+        "'Catalyseurs' sans raison factuelle.",
+        "7. N'invente JAMAIS un chiffre, une date ou un fait. Si une donnée est manquante, incertaine "
+        "ou que tu ne l'as pas trouvée via ta recherche, écris explicitement « non disponible » "
         "plutôt que de la deviner, l'estimer ou la compléter.",
-        f"4. Rappelle-toi et rappelle dans 'resume' que {_DISCLAIMER}",
+        f"8. Rappelle-toi et rappelle dans chaque résumé que {_DISCLAIMER}",
+        "9. L'aveu d'ignorance est explicitement AUTORISÉ et EXIGÉ : si tu ne trouves pas de source "
+        "primaire ou réputée pour étayer une affirmation, ne l'inclus pas — ou inscris explicitement "
+        "« aucune source fiable trouvée ». Ne comble JAMAIS un manque par une source faible "
+        "étiquetée à tort, ni par une affirmation plausible non vérifiée. Une section courte parce "
+        "que l'information fiable manque est préférable à une section remplie de suppositions.",
         "",
-        "Réponds UNIQUEMENT avec un objet JSON valide (aucun texte avant/après, aucun délimiteur ```), "
-        "avec exactement ces clés :",
-        '{"resume": "...", "points_positifs": ["..."], "points_vigilance": ["..."], '
-        '"catalyseurs": ["..."], "sources": ["..."], "date_donnees": "..."}',
+        "=== FORMAT DE RÉPONSE ATTENDU ===",
+        "Réponds en Markdown, avec EXACTEMENT une section par token (même ordre que ci-dessus), "
+        "suivant ce canevas :",
+        "",
+        "## {SYMBOLE}",
+        "",
+        "**Résumé :** ...",
+        "",
+        "**Points positifs :**",
+        "- ... [primaire/réputée/faible/non vérifié]",
+        "",
+        "**Points de vigilance :**",
+        "- ... [primaire/réputée/faible/non vérifié]",
+        "",
+        "**Catalyseurs :**",
+        "- ... [primaire/réputée/faible/non vérifié]",
+        "",
+        "**Sources :**",
+        "- Nom (primaire/réputée/faible) — lien si disponible",
+        "",
+        "**Date des données :** ...",
+        "",
+        f"Termine ta réponse par ce rappel, une seule fois : {_DISCLAIMER}",
     ]
     return "\n".join(lines)
 
 
-def _web_search_tool(cfg: FundamentalsCfg) -> dict[str, Any]:
-    return {"type": "web_search_20260209", "name": "web_search", "max_uses": cfg.web_search_max_uses}
-
-
 # --------------------------------------------------------------------------- #
-# Parsing défensif de la sortie LLM (§5.3 CDC)                                 #
+# Préparation du prompt (aucun appel payant, aucune clé Anthropic requise)      #
 # --------------------------------------------------------------------------- #
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
-
-
-def parse_llm_json(raw_text: str) -> dict[str, Any]:
-    """Extrait un objet JSON d'une réponse LLM (délimiteurs ``` et/ou préambule tolérés).
-
-    Lève `ValueError` si aucun JSON exploitable n'a pu être extrait — à charge de
-    l'appelant de marquer la synthèse indisponible plutôt que de propager l'erreur.
-    """
-    text = raw_text.strip()
-    fence_match = _JSON_FENCE_RE.search(text)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    else:
-        start = text.find("{")
-        if start == -1:
-            raise ValueError("aucun objet JSON trouvé dans la réponse du modèle")
-        depth = 0
-        end = None
-        for i, ch in enumerate(text[start:], start):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-        if end is None:
-            raise ValueError("objet JSON non terminé dans la réponse du modèle")
-        text = text[start:end]
-    parsed = json.loads(text)
-    if not isinstance(parsed, dict):
-        raise ValueError(f"JSON extrait n'est pas un objet ({type(parsed).__name__})")
-    return parsed
-
-
-def _build_synthesis(parsed: dict[str, Any], raw_text: str) -> LlmSynthesis:
-    def _list(key: str) -> list[str]:
-        value = parsed.get(key) or []
-        return [str(v) for v in value] if isinstance(value, list) else []
-
-    return LlmSynthesis(
-        resume=parsed.get("resume"),
-        points_positifs=_list("points_positifs"),
-        points_vigilance=_list("points_vigilance"),
-        catalyseurs=_list("catalyseurs"),
-        sources=_list("sources"),
-        date_donnees=parsed.get("date_donnees"),
-        raw_text=raw_text,
-    )
-
-
-# --------------------------------------------------------------------------- #
-# Appel de synthèse Claude (avec gestion de pause_turn — boucle recherche web)  #
-# --------------------------------------------------------------------------- #
-def _extract_text(content: list[Any]) -> str:
-    return "".join(getattr(block, "text", "") for block in content if getattr(block, "type", None) == "text")
-
-
-def _count_web_search_calls(content: list[Any]) -> int:
-    return sum(
-        1
-        for block in content
-        if getattr(block, "type", None) == "server_tool_use" and getattr(block, "name", None) == "web_search"
-    )
-
-
-def call_claude_synthesis(
-    anthropic_client: "anthropic.Anthropic", cfg: FundamentalsCfg, prompt: str
-) -> tuple[str, TokenUsage]:
-    """Appelle Claude avec l'outil de recherche web ; relance sur `pause_turn` (bornée)."""
-    tools = [_web_search_tool(cfg)] if cfg.web_search else []
-    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
-    usage = TokenUsage()
-    response = None
-    for _ in range(cfg.max_continuations + 1):
-        response = anthropic_client.messages.create(
-            model=cfg.model,
-            max_tokens=cfg.max_tokens_per_call,
-            tools=tools,
-            messages=messages,
-        )
-        usage.input_tokens += response.usage.input_tokens
-        usage.output_tokens += response.usage.output_tokens
-        usage.web_search_calls += _count_web_search_calls(response.content)
-        if response.stop_reason != "pause_turn":
-            break
-        messages = [
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": response.content},
-        ]
-    return _extract_text(response.content), usage
-
-
-# --------------------------------------------------------------------------- #
-# Phase 1 — préparation (données + estimation de coût, AUCUN appel payant)     #
-# --------------------------------------------------------------------------- #
-def prepare_run(
+def prepare_fundamentals_prompt(
     symbols: Sequence[str],
     config: AppConfig,
     http_client: httpx.Client,
-    anthropic_client: "anthropic.Anthropic",
     now_func: Callable[[], datetime] = _utc_now,
-) -> FundamentalsRunPlan:
-    """Résout, enrichit et construit les prompts — mesure le coût réel via `count_tokens`
-    (endpoint non facturé en génération) pour produire une estimation AVANT tout appel payant.
+) -> FundamentalsPromptResult:
+    """Résout, enrichit et compose le prompt unique de la shortlist (Mode A).
+
+    Aucun appel à un modèle de langage ici : uniquement CoinGecko/DefiLlama.
     """
     fcfg = config.fundamentals
     cg_key = require_env(fcfg.sources.coingecko.demo_key_env)
@@ -488,7 +394,7 @@ def prepare_run(
         except httpx.HTTPError as exc:
             logger.warning("fundamentals : DefiLlama injoignable (%r), TVL indisponible pour ce run", exc)
 
-    token_plans: list[TokenPlan] = []
+    tokens: list[TokenSnapshot] = []
     for symbol in symbols:
         errors: list[str] = []
         resolved: ResolvedToken | None = None
@@ -516,103 +422,17 @@ def prepare_run(
                 logger.warning("fundamentals : market data en échec pour %s : %r", symbol, exc)
             tvl_usd = find_tvl_by_gecko_id(protocols, resolved.coingecko_id)
 
-        fetched_at = now_func()
-        prompt = build_synthesis_prompt(symbol, resolved, market_data, tvl_usd, fetched_at)
-        counted = anthropic_client.messages.count_tokens(
-            model=fcfg.model, messages=[{"role": "user", "content": prompt}]
-        )
-        token_plans.append(
-            TokenPlan(
+        tokens.append(
+            TokenSnapshot(
                 symbol=symbol,
                 resolved=resolved,
                 market_data=market_data,
                 tvl_usd=tvl_usd,
-                prompt=prompt,
-                estimated_input_tokens=counted.input_tokens,
                 errors=errors,
-                fetched_at=fetched_at,
+                fetched_at=now_func(),
             )
         )
 
-    total_input = sum(t.estimated_input_tokens for t in token_plans)
-    worst_case_output = len(token_plans) * fcfg.max_tokens_per_call
-    # Pire cas : chaque token consomme le nombre max. de recherches web autorisé
-    # (`web_search_max_uses`). Tarif plat vérifié ($10/1000 recherches, indépendant
-    # du modèle) — jamais laissé « non chiffré » dans l'estimation présentée à l'utilisateur.
-    worst_case_web_searches = len(token_plans) * fcfg.web_search_max_uses if fcfg.web_search else 0
-    pricing = fcfg.pricing_usd_per_million_tokens
-    estimated_cost = (
-        total_input / 1_000_000 * pricing.input
-        + worst_case_output / 1_000_000 * pricing.output
-        + worst_case_web_searches / 1000 * pricing.web_search_per_1000
-    )
-    over_budget = (total_input + worst_case_output) > fcfg.max_tokens_per_run
-    return FundamentalsRunPlan(
-        tokens=token_plans,
-        estimated_input_tokens=total_input,
-        estimated_max_output_tokens=worst_case_output,
-        estimated_max_web_searches=worst_case_web_searches,
-        estimated_cost_usd=estimated_cost,
-        over_budget=over_budget,
-    )
-
-
-# --------------------------------------------------------------------------- #
-# Phase 2 — exécution (appels payants, après confirmation côté CLI)            #
-# --------------------------------------------------------------------------- #
-def execute_run(
-    plan: FundamentalsRunPlan,
-    config: AppConfig,
-    anthropic_client: "anthropic.Anthropic",
-    now_func: Callable[[], datetime] = _utc_now,
-) -> FundamentalsReport:
-    fcfg = config.fundamentals
-    pricing = fcfg.pricing_usd_per_million_tokens
-    tokens: list[TokenFundamentals] = []
-    total_input = total_output = total_web_search = 0
-
-    for token_plan in plan.tokens:
-        errors = list(token_plan.errors)
-        synthesis: LlmSynthesis | None = None
-        usage = TokenUsage()
-        try:
-            raw_text, usage = call_claude_synthesis(anthropic_client, fcfg, token_plan.prompt)
-            try:
-                parsed = parse_llm_json(raw_text)
-                synthesis = _build_synthesis(parsed, raw_text)
-            except (ValueError, json.JSONDecodeError) as exc:
-                errors.append(f"Synthèse LLM non parsable : {exc!r}")
-                logger.error("fundamentals : parsing JSON en échec pour %s : %r", token_plan.symbol, exc)
-        except Exception as exc:  # noqa: BLE001 - un échec Claude ne doit jamais tuer le run
-            errors.append(f"Appel de synthèse Claude en échec : {exc!r}")
-            logger.error("fundamentals : appel Claude en échec pour %s : %r", token_plan.symbol, exc)
-
-        total_input += usage.input_tokens
-        total_output += usage.output_tokens
-        total_web_search += usage.web_search_calls
-
-        tokens.append(
-            TokenFundamentals(
-                symbol=token_plan.symbol,
-                resolved=token_plan.resolved,
-                market_data=token_plan.market_data,
-                tvl_usd=token_plan.tvl_usd,
-                synthesis=synthesis,
-                usage=usage,
-                errors=errors,
-                fetched_at=token_plan.fetched_at,
-            )
-        )
-
-    real_cost = (
-        total_input / 1_000_000 * pricing.input
-        + total_output / 1_000_000 * pricing.output
-        + total_web_search / 1000 * pricing.web_search_per_1000
-    )
-    summary = RunUsageSummary(
-        total_input_tokens=total_input,
-        total_output_tokens=total_output,
-        estimated_cost_usd=real_cost,
-        web_search_calls=total_web_search,
-    )
-    return FundamentalsReport(generated_at=now_func(), tokens=tokens, usage=summary)
+    generated_at = now_func()
+    prompt = build_shortlist_prompt(tokens, generated_at)
+    return FundamentalsPromptResult(generated_at=generated_at, tokens=tokens, prompt=prompt)

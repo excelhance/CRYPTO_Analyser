@@ -72,20 +72,10 @@ thresholds:
   watch: 55
   signal: 70
 
-fundamentals:                       # Lot 5 — Mode B, jamais déclenché automatiquement par un scan
+fundamentals:                       # Lot 5 — Mode A : génère un prompt à coller dans l'interface Claude
+                                     # (Mode B abandonné, cf. docs/CDC.md §5.3 "Historique de décision")
   enabled: true
-  top_n: 10
-  model: claude-sonnet-5
-  web_search: true
-  web_search_max_uses: 5            # recherches web max. par token analysé (borne le coût du run)
-  max_tokens_per_call: 4096         # max_tokens de la réponse Claude, par token
-  max_continuations: 3              # relances max. sur pause_turn (boucle recherche web côté serveur)
-  max_tokens_per_run: 200000        # budget dur (entrée mesurée + sortie pire cas) ; le run est bloqué au-delà
-  anthropic_api_key_env: ANTHROPIC_API_KEY
-  pricing_usd_per_million_tokens:   # tarifs vérifiés sur platform.claude.com/docs/en/about-claude/pricing (2026-07-13)
-    input: 2.0                       # tarif INTRODUCTIF claude-sonnet-5 en vigueur jusqu'au 2026-08-31
-    output: 10.0                     # tarif standard après le 2026-08-31 : 3.0 / 15.0 — à remettre à jour alors
-    web_search_per_1000: 10.0        # $10 / 1000 recherches — tarif plat, indépendant du modèle et de l'échéance ci-dessus
+  top_n: 10                         # taille de la shortlist couverte par le prompt généré
   sources:
     coingecko:
       demo_key_env: COINGECKO_DEMO_KEY
@@ -95,7 +85,7 @@ fundamentals:                       # Lot 5 — Mode B, jamais déclenché autom
       enabled: true
       base_url: https://api.llama.fi
   output:
-    directory: output               # rapports Markdown + JSON, horodatés, à côté des CSV de scan
+    directory: output               # prompts Markdown horodatés, à côté des CSV de scan
 
 output:
   format: csv

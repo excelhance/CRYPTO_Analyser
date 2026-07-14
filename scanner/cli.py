@@ -4,13 +4,13 @@ Commandes :
   check        — valide le fichier de configuration et affiche un résumé.
   show         — affiche la configuration normalisée (JSON).
   scan         — lance un scan complet (univers, gate, indicateurs, scoring, restitution).
-  fundamentals — analyse fondamentale Mode B de la shortlist du dernier scan (opt-in, payant).
+  fundamentals — génère le prompt fondamental Mode A de la shortlist du dernier scan.
 
 Usage :
   python -m scanner.cli check  [--config config.yaml]
   python -m scanner.cli show   [--config config.yaml]
   python -m scanner.cli scan   [--config config.yaml] [--force-refresh]
-  python -m scanner.cli fundamentals [--config config.yaml] [--csv PATH] [--yes]
+  python -m scanner.cli fundamentals [--config config.yaml] [--csv PATH]
 """
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ import typer
 import yaml
 from pydantic import ValidationError
 from rich.console import Console
-from rich.prompt import Confirm
 
 # L'import du package déclenche `scanner/__init__.py` qui force l'encodage
 # UTF-8 de stdout/stderr — nécessaire ici sous Windows quand la sortie est
@@ -31,7 +30,7 @@ from . import fundamentals as fundamentals_module
 from .config import AppConfig, load_config
 from .logging_setup import setup_logging
 from .rate_limiter import BinanceBannedError
-from .reporting import print_console_table, write_csv, write_fundamentals_report
+from .reporting import print_console_table, write_csv, write_fundamentals_prompt
 from .scanner import run_scan
 
 app = typer.Typer(
@@ -83,7 +82,7 @@ def check(
         f"  Gate volume 24 h : {cfg.gates.min_quote_volume_24h:,.0f} USDC\n"
         f"  Seuils           : watch ≥ {cfg.thresholds.watch:g}, signal ≥ {cfg.thresholds.signal:g}\n"
         f"  Fondamental      : {'activé' if cfg.fundamentals.enabled else 'désactivé'} "
-        f"(modèle {cfg.fundamentals.model}, top {cfg.fundamentals.top_n})"
+        f"(top {cfg.fundamentals.top_n}, Mode A)"
     )
 
 
@@ -142,12 +141,12 @@ def fundamentals(
     csv: str | None = typer.Option(
         None, "--csv", help="CSV de scan à utiliser (défaut : le plus récent dans output.directory)."
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Ne pas demander de confirmation avant de dépenser."),
 ) -> None:
-    """Analyse fondamentale Mode B (§5 CDC) de la shortlist du dernier scan.
+    """Génère le prompt fondamental Mode A (§5 CDC) de la shortlist du dernier scan.
 
-    Jamais déclenchée automatiquement par un `scan` (coût). Affiche une estimation
-    de coût avant tout appel payant et demande confirmation (sauf --yes).
+    Jamais déclenchée automatiquement par un `scan`. Ne fait aucun appel à un modèle
+    de langage : récupère les données dures (CoinGecko/DefiLlama), compose un prompt
+    prêt à coller dans l'interface Claude, l'écrit dans un .md et l'affiche.
     """
     log = setup_logging()
     cfg = _load_or_exit(config)
@@ -155,7 +154,6 @@ def fundamentals(
     try:
         fundamentals_module.load_environment()
         fundamentals_module.require_env(cfg.fundamentals.sources.coingecko.demo_key_env)
-        fundamentals_module.require_env(cfg.fundamentals.anthropic_api_key_env)
     except fundamentals_module.FundamentalsConfigError as exc:
         console.print(f"[bold red]Configuration incomplète :[/] {exc}")
         raise typer.Exit(code=1) from exc
@@ -175,48 +173,17 @@ def fundamentals(
 
     console.print(f"Shortlist ({len(symbols)} paire(s), depuis {csv_path.name}) : {', '.join(symbols)}")
 
-    import anthropic  # import différé : dépendance optionnelle, seulement nécessaire ici
-
     http_client = httpx.Client(timeout=20.0)
-    anthropic_client = anthropic.Anthropic()
     try:
-        plan = fundamentals_module.prepare_run(symbols, cfg, http_client, anthropic_client)
-
-        pricing = cfg.fundamentals.pricing_usd_per_million_tokens
-        console.print(
-            f"Estimation avant appel (pire cas) :\n"
-            f"  - {plan.estimated_input_tokens} tokens entrée (mesurés) × {pricing.input:.2f}$/MTok\n"
-            f"  - jusqu'à {plan.estimated_max_output_tokens} tokens sortie × {pricing.output:.2f}$/MTok\n"
-            f"  - jusqu'à {plan.estimated_max_web_searches} recherche(s) web × "
-            f"{pricing.web_search_per_1000:.2f}$/1000 recherches\n"
-            f"  ≈ [bold]{plan.estimated_cost_usd:.4f} USD[/] au total (pire cas)."
-        )
-        if plan.over_budget:
-            console.print(
-                f"[bold red]Budget dépassé :[/] "
-                f"{plan.estimated_input_tokens + plan.estimated_max_output_tokens} tokens estimés > "
-                f"fundamentals.max_tokens_per_run ({cfg.fundamentals.max_tokens_per_run}). "
-                "Réduisez top_n ou relevez ce budget dans la config."
-            )
-            raise typer.Exit(code=1)
-
-        if not yes and not Confirm.ask("Lancer les appels payants à l'API Anthropic ?", default=False):
-            console.print("Annulé — aucun appel payant effectué.")
-            raise typer.Exit(code=0)
-
-        report = fundamentals_module.execute_run(plan, cfg, anthropic_client)
+        result = fundamentals_module.prepare_fundamentals_prompt(symbols, cfg, http_client)
     finally:
         http_client.close()
 
-    md_path, json_path = write_fundamentals_report(report, cfg)
-    console.print(
-        f"[bold green]Rapport fondamental exporté :[/] {md_path} (+ {json_path.name})\n"
-        f"Coût réel : {report.usage.total_input_tokens} tokens entrée, "
-        f"{report.usage.total_output_tokens} tokens sortie, "
-        f"{report.usage.web_search_calls} recherche(s) web "
-        f"≈ [bold]{report.usage.estimated_cost_usd:.4f} USD[/] au total."
-    )
-    log.info("Fondamental terminé : %s", md_path)
+    prompt_path = write_fundamentals_prompt(result, cfg)
+    console.print(f"[bold green]Prompt fondamental exporté :[/] {prompt_path}\n")
+    console.print("Prompt à coller dans votre interface Claude :\n")
+    console.print(result.prompt, markup=False, highlight=False)
+    log.info("Prompt fondamental généré : %s", prompt_path)
 
 
 if __name__ == "__main__":

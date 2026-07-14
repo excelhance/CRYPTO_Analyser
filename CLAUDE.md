@@ -8,8 +8,14 @@ Outil semi-automatisé d'aide à la décision pour le trading **Spot, long uniqu
 **Spécification de référence : `docs/CDC.md` (CDC v1.1). C'est la source de vérité.** En cas de doute sur une règle, un paramètre ou l'architecture, s'y référer avant de coder.
 
 ## État d'avancement
-- **Lot 0 (fondations) : FAIT** — arborescence, `config.yaml`, validation pydantic v2, journalisation, CLI (`check` / `show`), 11 tests verts.
-- **Prochain : Lot 1** — récupération des données (exchangeInfo + klines), gestion des rate limits, cache. Découpage des lots et critères d'acceptation : §8 du CDC.
+- **Lot 0 (fondations) : FAIT** — arborescence, `config.yaml`, validation pydantic v2, journalisation, CLI (`check` / `show`).
+- **Lot 1 (couche données) : FAIT** — `data_fetcher.py` (univers + klines), `rate_limiter.py` (gouverneur de poids, backoff 429/418), `cache.py` (parquet, incrémental).
+- **Lot 2 (indicateurs) : FAIT** — `indicators.py`, wrap TA-Lib exclusivement (aucun indicateur réimplémenté à la main).
+- **Lot 3 (scoring) : FAIT** — `scoring_engine.py`, score directionnel par TF (ADX modulé) + consolidation multi-échelles (approche B) + décomposition.
+- **Lot 4 (restitution) : FAIT** — `reporting.py`, console (rich) + export CSV (une ligne par paire).
+- **Lot 5 (fondamental) : FAIT, en Mode A** — `fundamentals.py` génère un prompt unique (données dures CoinGecko/DefiLlama + cadrage de sourçage) écrit en `.md` et affiché console, à coller manuellement dans l'interface Claude. Le **Mode B** (appel automatisé de l'API Anthropic, recherche web, estimateur de coût) avait été implémenté puis **abandonné** : complexité et coût de l'estimateur disproportionnés, choix de garder l'humain dans la boucle. Détail : `docs/CDC.md` §5.3 ("Historique de décision").
+- **Lot 6 (options) : PAS COMMENCÉ** — dashboard `streamlit`, backtest léger. Non prioritaire (§6.3 du CDC).
+- 136 tests verts (`python -m pytest`). Découpage des lots et critères d'acceptation : §8 du CDC.
 
 ## Développement incrémental (règle stricte)
 - Ne jamais démarrer un lot tant que le critère d'acceptation du précédent n'est pas vérifié (tests verts).
@@ -17,11 +23,18 @@ Outil semi-automatisé d'aide à la décision pour le trading **Spot, long uniqu
 - Après toute modification significative : lancer les tests et corriger **avant** de considérer la tâche terminée (auto-vérification systématique).
 
 ## Architecture (dossier `scanner/`)
-- `config.py` — modèles pydantic + chargement/validation *(fait)*
-- `constants.py` — constantes partagées (intervalles Binance valides) *(fait)*
-- `logging_setup.py` — journalisation console + fichier *(fait)*
-- `cli.py` — point d'entrée typer *(fait)*
-- À venir : `data_fetcher.py`, `rate_limiter.py`, `cache.py` (Lot 1) ; `indicators.py` (Lot 2) ; `scoring_engine.py` (Lot 3) ; `reporting.py` (Lot 4) ; `fundamentals.py` (Lot 5).
+- `config.py` — modèles pydantic + chargement/validation *(fait, Lot 0)*
+- `constants.py` — constantes partagées (intervalles Binance valides) *(fait, Lot 0)*
+- `logging_setup.py` — journalisation console + fichier *(fait, Lot 0)*
+- `data_fetcher.py` — univers `*/USDC` (`exchangeInfo`) + bougies (`klines`) *(fait, Lot 1)*
+- `rate_limiter.py` — gouverneur de poids Binance, backoff 429/418 *(fait, Lot 1)*
+- `cache.py` — persistance parquet, rafraîchissement incrémental *(fait, Lot 1)*
+- `indicators.py` — indicateurs par TF, wrap TA-Lib *(fait, Lot 2)*
+- `scoring_engine.py` — score par TF + consolidation multi-échelles + décomposition *(fait, Lot 3)*
+- `scanner.py` — orchestrateur du pipeline (gates, appel des couches) *(fait, Lot 3/4)*
+- `reporting.py` — restitution console (rich) + CSV + prompt fondamental *(fait, Lot 4/5)*
+- `fundamentals.py` — résolution CoinGecko/DefiLlama + génération du prompt (Mode A) *(fait, Lot 5)*
+- `cli.py` — point d'entrée typer (`check`/`show`/`scan`/`fundamentals`) *(fait)*
 
 ## Conventions de code
 - **Commentaires et docstrings en français.**
@@ -33,8 +46,11 @@ Outil semi-automatisé d'aide à la décision pour le trading **Spot, long uniqu
 - Ajouter/mettre à jour les tests `pytest` à chaque lot.
 
 ## Stack technique
-- Python 3.14 ; pydantic v2, PyYAML, typer, rich *(en place)*.
-- À venir selon les lots : `httpx` (API Binance), `pyarrow` (cache parquet), `pandas`/`numpy`, **TA-Lib** (indicateurs), `anthropic` (synthèse fondamentale, Mode B).
+- Python 3.14 ; pydantic v2, PyYAML, typer, rich *(en place, Lot 0)*.
+- `httpx` (API Binance), `pyarrow` (cache parquet), `pandas`/`numpy` *(en place, Lot 1)*.
+- **TA-Lib** (indicateurs) *(en place, Lot 2)*.
+- Fondamental (Lot 5, Mode A) : `python-dotenv` (clé CoinGecko) — **aucune dépendance `anthropic`** (pas d'appel API, cf. état d'avancement ci-dessus).
+- Lot 6 (option, pas commencé) : `streamlit` (dashboard).
 - **Ne jamais réimplémenter un indicateur à la main** : déléguer à TA-Lib.
 
 ## Commandes utiles (Windows / PowerShell)

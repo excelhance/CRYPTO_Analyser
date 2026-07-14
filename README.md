@@ -61,5 +61,5 @@ doit correspondre à celle affichée sur votre graphique Binance/TradingView.
 - **Lot 2** — indicateurs (TA-Lib)
 - **Lot 3** — scoring + consolidation multi-échelles (approche B)
 - **Lot 4** — restitution CSV
-- **Lot 5** — analyse fondamentale (Mode B, API Anthropic)
+- **Lot 5** — analyse fondamentale (Mode A, prompt généré ; Mode B/API Anthropic tenté puis abandonné, cf. docs/CDC.md §5.3)
 - **Lot 6** — dashboard (option), backtest léger

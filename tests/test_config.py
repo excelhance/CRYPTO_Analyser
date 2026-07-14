@@ -28,7 +28,7 @@ def test_shipped_config_is_valid():
     cfg = load_config(CONFIG_PATH)
     assert cfg.intervals == ["4h", "12h", "1d", "1w", "1M"]
     assert cfg.thresholds.watch < cfg.thresholds.signal
-    assert cfg.fundamentals.model == "claude-sonnet-5"
+    assert cfg.fundamentals.top_n == 10
 
 
 def test_invalid_interval_rejected():

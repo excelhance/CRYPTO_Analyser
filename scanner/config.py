@@ -319,44 +319,15 @@ class SourcesCfg(_Base):
     defillama: DefillamaCfg
 
 
-class PricingCfg(_Base):
-    input: float = Field(gt=0, description="USD par million de tokens en entrée.")
-    output: float = Field(gt=0, description="USD par million de tokens en sortie.")
-    web_search_per_1000: float = Field(
-        gt=0, description="USD par 1000 recherches web (tarif plat, indépendant du modèle)."
-    )
-
-
 class FundamentalsOutputCfg(_Base):
-    directory: str = Field(min_length=1, description="Répertoire des rapports fondamentaux (Markdown + JSON).")
+    directory: str = Field(min_length=1, description="Répertoire des prompts fondamentaux générés (Mode A).")
 
 
 class FundamentalsCfg(_Base):
     enabled: bool = True
-    top_n: int = Field(ge=1, description="Taille de la shortlist envoyée à la synthèse.")
-    model: str = Field(min_length=1)
-    web_search: bool = True
-    web_search_max_uses: int = Field(gt=0, description="Recherches web max. par token analysé.")
-    max_tokens_per_call: int = Field(gt=0, description="max_tokens de la réponse Claude, par token analysé.")
-    max_continuations: int = Field(
-        ge=0, description="Relances max. sur stop_reason=pause_turn (boucle recherche web serveur)."
-    )
-    max_tokens_per_run: int = Field(
-        gt=0, description="Budget dur de tokens (entrée mesurée + sortie pire cas) pour tout le run."
-    )
-    anthropic_api_key_env: str = Field(min_length=1, description="Nom de la variable d'environnement (clé API Anthropic).")
-    pricing_usd_per_million_tokens: PricingCfg
+    top_n: int = Field(ge=1, description="Taille de la shortlist couverte par le prompt généré.")
     sources: SourcesCfg
     output: FundamentalsOutputCfg
-
-    @model_validator(mode="after")
-    def _check_budget(self) -> "FundamentalsCfg":
-        if self.max_tokens_per_run < self.max_tokens_per_call:
-            raise ValueError(
-                f"fundamentals.max_tokens_per_run ({self.max_tokens_per_run}) doit être >= "
-                f"max_tokens_per_call ({self.max_tokens_per_call})"
-            )
-        return self
 
 
 # --------------------------------------------------------------------------- #

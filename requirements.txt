@@ -16,9 +16,8 @@ pandas>=2.2          # manipulation OHLCV
 numpy>=2.0           # tableaux float64 contigus pour TA-Lib
 TA-Lib>=0.6.0         # indicateurs (wheels officiels, incl. Windows) ; aucun réimplémenté à la main
 
-# === Lot 5 — fondamental (Mode B) ===
-anthropic>=0.68        # synthèse fondamentale (API Anthropic, claude-sonnet-5 + recherche web)
-python-dotenv>=1.0     # chargement de .env (clés API, jamais en dur)
+# === Lot 5 — fondamental (Mode A) ===
+python-dotenv>=1.0     # chargement de .env (clé CoinGecko, jamais en dur)
 
 # === Lots suivants (à décommenter le moment venu) ===
 # streamlit>=1.37      # Lot 6 : dashboard (option)
